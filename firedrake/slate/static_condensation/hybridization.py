@@ -202,6 +202,7 @@ class HybridizationPC(SCBase):
         # Build schur complement operator and right hand side
         self.schur_builder = SchurComplementBuilder(prefix, Atilde, K, pc, self.vidx, self.pidx)
         schur_rhs, schur_comp = self.schur_builder.build_schur(self.broken_residual)
+        self.schur_builder.total_local_shape = Tensor(self.ctx.a).shape
 
         # Assemble the Schur complement operator and right-hand side
         self.schur_rhs = Function(TraceSpace)
