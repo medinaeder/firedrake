@@ -169,7 +169,7 @@ def generate_loopy_kernel(slate_expr, compiler_parameters=None):
     gem_expr, var2terminal = slate_to_gem(slate_expr, compiler_parameters["slate_compiler"])
 
     scalar_type = compiler_parameters["form_compiler"]["scalar_type"]
-    slate_loopy, output_arg = gem_to_loopy(gem_expr, var2terminal, scalar_type)
+    (slate_loopy, slate_loopy_events), output_arg = gem_to_loopy(gem_expr, var2terminal, scalar_type)
 
     builder = LocalLoopyKernelBuilder(expression=slate_expr,
                                       tsfc_parameters=compiler_parameters["form_compiler"])
@@ -181,7 +181,8 @@ def generate_loopy_kernel(slate_expr, compiler_parameters=None):
 
     loopykernel = tsfc_interface.as_pyop2_local_kernel(loopy_merged, name, len(arguments),
                                                        include_dirs=BLASLAPACK_INCLUDE.split(),
-                                                       ldargs=BLASLAPACK_LIB.split())
+                                                       ldargs=BLASLAPACK_LIB.split(),
+                                                       events=slate_loopy_events)
 
     # map the coefficients in the order that PyOP2 needs
     new_coeffs = slate_expr.coefficients()

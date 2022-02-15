@@ -335,7 +335,7 @@ def merge_loopy(slate_loopy, output_arg, builder, var2terminal, name):
     loopy_args = [output_arg.loopy_arg] + [a.loopy_arg for a in args] + tmp_args
     
     # Add profiling for inits
-    inits = profile_insns("inits_"+name, inits)
+    inits, slate_init_event = profile_insns("inits_"+name, inits)
 
     # Munge instructions
     insns = inits
@@ -343,7 +343,7 @@ def merge_loopy(slate_loopy, output_arg, builder, var2terminal, name):
     insns.append(builder.slate_call(slate_loopy, tensor2temp.values()))
 
     # Add profiling for the whole kernel
-    insns = profile_insns(name, insns)
+    insns, slate_wrapper_event = profile_insns(name, insns)
 
     # Inames come from initialisations + loopyfying kernel args and lhs
     domains = builder.bag.index_creator.domains
