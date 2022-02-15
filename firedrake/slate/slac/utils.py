@@ -18,6 +18,7 @@ import firedrake.slate.slate as sl
 import loopy as lp
 from loopy.version import LOOPY_USE_LANGUAGE_VERSION_2018_2  # noqa: F401
 import itertools
+from tsfc.loopy import profile_insns
 
 from pyop2.codegen.loopycompat import _match_caller_callee_argument_dimension_
 import pymbolic.primitives as pym
@@ -417,11 +418,17 @@ def assemble_terminals_first(builder, gem2slate, slate_loopy):
     tsfc_calls, tsfc_kernels = zip(*itertools.chain.from_iterable(
                                    (builder.generate_tsfc_calls(terminal, tensor2temp[terminal])
                                     for terminal in terminal_tensors)))
+    
+    # Add profiling for inits
+    inits = profile_insns("inits_"+slate_loopy.name, inits)
 
     # Munge instructions
     insns = inits
     insns.extend(tsfc_calls)
     insns.append(builder.slate_call(slate_loopy, tensor2temp.values()))
+
+    # Add profiling for instructions
+    insns = profile_insns(slate_loopy.name, insns)
     
     return tensor2temp, tsfc_kernels, insns, builder
 
