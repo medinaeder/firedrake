@@ -1,4 +1,7 @@
 import itertools
+from itertools import compress
+import os
+import tempfile
 import weakref
 from collections import OrderedDict, defaultdict
 from functools import singledispatch
@@ -11,6 +14,7 @@ from gem.impero_utils import compile_gem, preprocess_gem
 from gem.node import MemoizerArg
 from gem.node import traversal as gem_traversal
 from pyop2 import op2
+from pyop2.caching import disk_cached
 from pyop2.parloop import GlobalLegacyArg, DatLegacyArg
 from tsfc import ufl2gem
 from tsfc.loopy import generate
@@ -326,8 +330,9 @@ class Assign(object):
         for e in self.split:
             grouping.setdefault(e.lvalue.node_set, []).append(e)
         for iterset, exprs in grouping.items():
-            k, args = pointwise_expression_kernel(exprs, ScalarType)
-            result.append((k, iterset, tuple(args)))
+            k, arg_filter = pointwise_expression_kernel(exprs, ScalarType)
+            args = tuple(compress((a for expr in exprs for a in expr.args), arg_filter))
+            result.append((k, iterset, args))
         return tuple(result)
 
     @staticmethod
@@ -410,13 +415,35 @@ def compile_to_gem(expr, translator):
     return preprocess_gem([lvalue, rvalue])
 
 
+try:
+    _cachedir = os.environ["FIREDRAKE_TSFC_KERNEL_CACHE_DIR"]
+except KeyError:
+    _cachedir = os.path.join(tempfile.gettempdir(),
+                             f"firedrake-pointwise-expression-kernel-cache-uid{os.getuid()}")
+"""Storage location for the kernel cache."""
+
+
+def _pointwise_expression_key(exprs, scalar_type):
+    """Return a cache key for use with :func:`pointwise_expression_kernel`."""
+    # Since this cache is collective this function must return a 2-tuple of
+    # communicator and cache key.
+    comm = exprs[0].lvalue.node_set.comm
+    key = tuple(e.fast_key for e in exprs), scalar_type
+    return comm, key
+
+
 @PETSc.Log.EventDecorator()
+@disk_cached({}, _cachedir, key=_pointwise_expression_key, collective=True)
 def pointwise_expression_kernel(exprs, scalar_type):
     """Compile a kernel for pointwise expressions.
 
     :arg exprs: List of expressions, all on the same iteration set.
     :arg scalar_type: Default scalar type (numpy.dtype).
-    :returns: a PyOP2 kernel for evaluation of the expressions."""
+    :returns: A 2-tuple where the first entry is a PyOP2 kernel for
+        evaluation of the expressions and the second is a boolean array
+        used for filtering the expression arguments (to avoid passing in
+        duplicates).
+    """
     if len(set(e.lvalue.node_set for e in exprs)) > 1:
         raise ValueError("All expressions must have same node layout.")
     translator = Translator()
@@ -429,14 +456,15 @@ def pointwise_expression_kernel(exprs, scalar_type):
                            remove_zeros=False, emit_return_accumulate=False)
     coefficients = translator.varmapping
     args = []
-    plargs = []
+    arg_filter = []
     for expr in exprs:
         for c, arg in zip(expr.coefficients, expr.args):
             try:
                 var = coefficients.pop(c)
+                arg_filter.append(True)
             except KeyError:
+                arg_filter.append(False)
                 continue
-            plargs.append(arg)
             is_input = arg.access in [op2.INC, op2.MAX, op2.MIN, op2.READ, op2.RW]
             is_output = arg.access in [op2.INC, op2.MAX, op2.MIN, op2.RW, op2.WRITE]
             args.append(loopy.GlobalArg(var.name, shape=var.shape, dtype=c.dat.dtype, is_input=is_input, is_output=is_output))
@@ -444,7 +472,7 @@ def pointwise_expression_kernel(exprs, scalar_type):
     name = "expression_kernel"
     knl = generate(impero_c, args, scalar_type, kernel_name=name,
                    return_increments=False)
-    return firedrake.op2.Kernel(knl, name), plargs
+    return firedrake.op2.Kernel(knl, name), arg_filter
 
 
 class dereffed:
